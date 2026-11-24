@@ -1,1 +1,1 @@
-{"v": 1, "kdf": "PBKDF2-SHA256", "iterations": 600000, "salt": "8xYJwhfHEtMe2b0cqfhSGA==", "data": "d/72d294e3661fed6a5e6918f7.bin"}
+{"v": 2, "gzip": false, "kdf": "PBKDF2-SHA256", "iterations": 600000, "salt": "8xYJwhfHEtMe2b0cqfhSGA==", "data": "d/ec3f5adc9799132914a94e10.bin"}

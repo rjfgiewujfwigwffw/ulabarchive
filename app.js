@@ -15,7 +15,7 @@
   const store = { get: k => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch { } }, del: k => { try { localStorage.removeItem(k); } catch { } } };
 
   let DATA, TESTS = [], BY_ID = new Map(), BATCH_COUNT = new Map(), CLASS_COLOR = {};
-  const DEFAULT = { q: '', labs: [], classes: [], years: [], from: '', to: '', batch: false, warn: false, multi: false, topics: true, sort: 'new', view: 'tests' };
+  const DEFAULT = { q: '', labs: [], classes: [], res: [], years: [], from: '', to: '', batch: false, warn: false, multi: false, topics: true, sort: 'new', view: 'tests' };
   let S = { ...DEFAULT }, route = { test: null }, current = [], renderLimit = 0, labsExpanded = false, labQuery = '';
 
   /* ---------- URL state ---------- */
@@ -30,6 +30,8 @@
     if (s.batch) p.set('batch', '1');
     if (s.warn) p.set('warn', '1');
     if (s.multi) p.set('multi', '1');
+    if (s.res.length) p.set('r', s.res.join('|'));
+    if (s.all) p.set('all', '1');
     if (!s.topics) p.set('topics', '0');
     if (s.sort !== 'new') p.set('sort', s.sort);
     if (s.view !== 'tests') p.set('view', s.view);
@@ -43,7 +45,7 @@
     const list = k => (p.get(k) || '').split('|').filter(Boolean);
     S = {
       ...DEFAULT, q: p.get('q') || '', labs: list('lab'), classes: list('c'), years: list('y'), from: p.get('from') || '', to: p.get('to') || '',
-      batch: p.get('batch') === '1', warn: p.get('warn') === '1', multi: p.get('multi') === '1', topics: p.get('topics') !== '0',
+      batch: p.get('batch') === '1', warn: p.get('warn') === '1', multi: p.get('multi') === '1', topics: p.get('topics') !== '0', res: list('r'), all: p.get('all') === '1',
       sort: p.get('sort') || 'new', view: p.get('view') || 'tests',
     };
     const m = path.match(/^t\/(\d+)/);
@@ -83,6 +85,7 @@
     if (s.batch && !t.batches.length) return false;
     if (s.warn && !t.warning) return false;
     if (s.multi && !t.batches.some(b => BATCH_COUNT.get(b.toUpperCase()) > 1)) return false;
+    if (skip !== 'res' && s.res.length && !s.res.includes(t.r || 'none')) return false;
     return matchQuery(t, s.q);
   }
   const filtered = skip => TESTS.filter(t => passes(t, S, skip));
@@ -126,7 +129,12 @@
     $$('.views button').forEach(b => b.setAttribute('aria-selected', b.dataset.view === S.view));
     if (document.activeElement !== $('#q')) $('#q').value = S.q;
 
+    if (DATA.matrix) {
+      const rCount = count(filtered('res'), t => t.r || 'none');
+      $('#f-results').innerHTML = Object.keys(RES).map(k => `<button class="chip${rCount.get(k) ? '' : ' zero'}" data-res="${k}" aria-pressed="${S.res.includes(k)}"><i class="dot ${k}"></i>${RES[k]} <span class="n">${rCount.get(k) || 0}</span></button>`).join('');
+    }
     const pills = [];
+    S.res.forEach(r => pills.push(['res', r, RES[r]]));
     if (S.q) pills.push(['q', null, `Search: ${S.q}`]);
     S.labs.forEach(l => pills.push(['labs', l, l]));
     S.classes.forEach(c => pills.push(['classes', c, c]));
@@ -148,7 +156,7 @@
     const p = t.photos[0];
     return `<a class="card" href="#/t/${t.id}${toQuery(S)}" data-id="${t.id}">
       <div class="thumb"><img data-src="${p.t}" alt="" decoding="async">
-        <span class="count">${photoIcon}${t.photos.length}</span>${t.warning ? '<span class="flag">Warning</span>' : ''}</div>
+        <span class="count">${photoIcon}${t.photos.length}</span>${t.warning ? '<span class="flag">Warning</span>' : ''}${t.r ? `<span class="res ${t.r}" title="Result: ${RES[t.r]}">${RES[t.r]}</span>` : ''}</div>
       <div class="card-body">
         <span class="card-date">${fmtDate(t.date)}</span>
         <span class="card-title">${esc(t.compound || t.title)}</span>
@@ -161,10 +169,11 @@
     current = sortTests(filtered());
     const labsN = new Set(current.map(t => t.lab)).size;
     const photos = current.reduce((n, t) => n + t.photos.length, 0);
-    $('#summary').innerHTML = S.view === 'labs'
+    if (S.view === 'matrix' && !DATA.matrix) S.view = 'tests';
+    $('#summary').innerHTML = S.view === 'matrix' ? matrixSummary() : S.view === 'labs'
       ? `<b>${plural(labsN, 'lab')}</b>, ${plural(current.length, 'test')}`
       : `<b>${plural(current.length, 'test')}</b>, ${plural(labsN, 'lab')}, ${plural(photos, 'photo')}`;
-    $('.sort').style.visibility = S.view === 'labs' ? 'hidden' : '';
+    $('.sort').style.visibility = S.view !== 'tests' ? 'hidden' : '';
     renderLimit = 0;
     $('#results').innerHTML = '';
     if (!current.length) {
@@ -172,6 +181,7 @@
       return;
     }
     if (S.view === 'labs') return renderLabs();
+    if (S.view === 'matrix') return renderMatrix();
     more();
   }
   function more() {
@@ -215,6 +225,87 @@
     }).join('')}</div>`;
   }
 
+  /* ---------- Matrix ---------- */
+  const RES = { ok: 'Within 10%', warn: '10 to 20%', fail: 'Over 20% or wrong', conf: 'Substance confirmed', none: 'Not rated' };
+  let LAB_BY_NORM = new Map();
+  const labFor = u => LAB_BY_NORM.get(norm(u)) || null;
+  function matrixRows() {
+    const M = DATA.matrix, q = norm(S.q);
+    return M.rows.filter(r => (S.all || Object.keys(r.c).length) && (!q || norm(r.u).includes(q))
+      && (!S.labs.length || S.labs.some(l => norm(l) === norm(r.u))));
+  }
+  function matrixSummary() {
+    const rows = matrixRows(), cells = rows.reduce((n, r) => n + Object.keys(r.c).length, 0);
+    return `<b>${plural(rows.length, 'lab')}</b>, ${plural(cells, 'result')}${DATA.matrix.stand ? `, as of ${fmtDate(DATA.matrix.stand)}` : ''}`;
+  }
+  function isNew(d) {
+    if (!d || !DATA.matrix.stand) return false;
+    return (new Date(DATA.matrix.stand) - new Date(d)) / 864e5 <= 14;
+  }
+  function renderMatrix() {
+    const M = DATA.matrix, rows = matrixRows();
+    const head1 = M.groups.map(g => `<th class="mx-group" colspan="${M.cols.filter(c => c.g === g.k).length}">${esc(g.l)}</th>`).join('');
+    const firstOf = new Set(M.groups.map(g => M.cols.find(c => c.g === g.k).k));
+    const head2 = M.cols.map(c => `<th class="mx-col${firstOf.has(c.k) ? ' gs' : ''}"><span>${esc(c.l)}</span></th>`).join('');
+    const body = rows.map(r => `<tr><th class="mx-lab"><button data-mx-lab="${esc(r.u)}" ${labFor(r.u) ? '' : 'disabled'}>${esc(r.u)}</button></th>${M.cols.map(c => {
+      const v = r.c[c.k], gs = firstOf.has(c.k) ? ' class="gs"' : '';
+      if (!v) return `<td${gs}></td>`;
+      const [s, d, hist] = v, st = s || 'none';
+      const tip = `${r.u}, ${c.l}: ${RES[st]}${d ? `, ${fmtDate(d)}` : ''}${hist && hist.length > 1 ? `, ${hist.length} tests` : ''}`;
+      return `<td${gs}><button class="mx-c ${st}${isNew(d) ? ' new' : ''}${hist && hist.length > 1 ? ' hh' : ''}" data-cell="${c.k}" data-u="${esc(r.u)}" title="${esc(tip)}" aria-label="${esc(tip)}"></button></td>`;
+    }).join('')}</tr>`).join('');
+    $('#results').innerHTML = `
+      <div class="mx-bar">
+        <div class="mx-legend">${['ok', 'warn', 'fail', 'none'].map(k => `<span><i class="dot ${k}"></i>${RES[k]}</span>`).join('')}<span><i class="dot ok new"></i>New (last 14 days)</span></div>
+        <label class="check"><input type="checkbox" id="mx-all" ${S.all ? 'checked' : ''}> Show labs without results</label>
+      </div>
+      <p class="mx-help muted">Each square is the latest result for that lab and compound. Click a square for all tests behind it, or a lab name for its tests.</p>
+      ${rows.length ? `<div class="mx-wrap"><table class="mx"><thead><tr><th class="mx-corner" rowspan="2">${DATA.matrix.stand ? `As of ${fmtDate(DATA.matrix.stand)}` : ''}</th>${head1}</tr><tr>${head2}</tr></thead><tbody>${body}</tbody></table></div>`
+        : '<div class="empty"><h2>Nothing found</h2></div>'}`;
+    const all = $('#mx-all'); if (all) all.onchange = e => { S.all = e.target.checked; commit(); };
+  }
+  function openCell(u, k) {
+    const M = DATA.matrix, col = M.cols.find(c => c.k === k), row = M.rows.find(r => r.u === u);
+    if (!col || !row || !row.c[k]) return;
+    const [s, d, hist = []] = row.c[k];
+    const mine = M.analyses.filter(a => norm(a.u) === norm(u) && a.w.includes(col.w));
+    const dates = new Set(hist.map(h => h[1]).filter(Boolean));
+    let list = dates.size ? mine.filter(a => dates.has(a.d)) : [];
+    if (!list.length) list = mine;
+    // Our own tests from this lab on the matrix dates (covers analyses the list above does not have).
+    const have = new Set(list.map(a => a.id));
+    for (const t of TESTS) {
+      if (norm(t.lab) === norm(u) && t.date && dates.has(t.date) && !have.has(t.id)) {
+        const h = hist.find(x => x[1] === t.date);
+        list.push({ id: t.id, u, d: t.date, s: h ? h[0] : (t.r || ''), w: [], n: t.compound || t.title, b: t.batches.join(', '), have: true });
+      }
+    }
+    list.sort((a, b) => b.d.localeCompare(a.d));
+    const lab = labFor(u);
+    const item = a => {
+      const t = BY_ID.get(a.id), st = a.s || 'none';
+      const inner = `${t ? `<img data-src="${t.photos[0].t}" alt="">` : '<span class="noimg"></span>'}<span><b>${esc(a.n || (t && t.title) || 'Test')}</b><small><i class="dot ${st}"></i>${RES[st]}${a.d ? `, ${fmtDate(a.d)}` : ''}${a.b ? `, batch ${esc(a.b)}` : ''}${t ? '' : ', not in this archive'}</small></span>`;
+      return t ? `<a href="#/t/${t.id}${toQuery(S)}">${inner}</a>` : `<div class="mini-off">${inner}</div>`;
+    };
+    const el = $('#detail');
+    el.innerHTML = `<div class="detail-panel cell-panel">
+      <div class="d-head"><button class="icon-btn" data-close-cell aria-label="Close">×</button><span class="d-crumb">${esc(u)} / ${esc(col.l)}</span></div>
+      <div class="cell-body">
+        <div class="cell-top"><i class="dot big ${s || 'none'}"></i><div><h1 id="d-title">${esc(col.l)}</h1><div class="muted">${esc(u)}</div></div></div>
+        <dl class="meta">
+          <dt>Latest</dt><dd>${RES[s || 'none']}${d ? `, ${fmtDate(d)}` : ''}</dd>
+          <dt>History</dt><dd><div class="hist">${hist.map(h => `<span><i class="dot ${h[0] || 'none'}"></i>${h[1] ? fmtDate(h[1]) : 'Undated'}</span>`).join('') || '<span class="muted">None</span>'}</div></dd>
+        </dl>
+        <section class="d-section"><h2>Tests (${list.length})</h2><div class="mini-list">${list.map(item).join('') || '<p class="muted">No linked tests.</p>'}</div></section>
+        ${lab ? `<button class="link-btn" data-lab-link="${esc(lab)}">All ${esc(lab)} tests</button>` : ''}
+      </div></div>`;
+    el.hidden = false; document.body.classList.add('locked');
+    $('[data-close-cell]', el).focus({ preventScroll: true });
+    cellOpen = true;
+  }
+  let cellOpen = false;
+  function closeCell() { cellOpen = false; $('#detail').hidden = true; document.body.classList.remove('locked'); }
+
   /* ---------- Detail ---------- */
   let lastFocus = null;
   function openDetail(id) {
@@ -248,6 +339,7 @@
             <dt>Test date</dt><dd>${fmtDate(t.date)}</dd>
             <dt>Batch</dt><dd>${t.batches.length ? `<div class="batches" style="margin:0">${t.batches.map(b => `<button class="batch" data-batch="${esc(b)}" title="Search this batch">${esc(b)}${BATCH_COUNT.get(b.toUpperCase()) > 1 ? ` ×${BATCH_COUNT.get(b.toUpperCase())}` : ''}</button>`).join('')}</div>` : '<span class="muted">Not given</span>'}</dd>
             <dt>Compound</dt><dd><div class="tags">${t.classes.map(c => `<span class="tag">${esc(c)}</span>`).join('')}</div></dd>
+            ${DATA.matrix ? `<dt>Result</dt><dd>${t.r ? `<span class="res-inline ${t.r}"><i class="dot ${t.r}"></i>${RES[t.r]}</span>` : '<span class="muted">Not rated</span>'}</dd>` : ''}
             <dt>Photos</dt><dd>${t.photos.length}</dd>
             <dt>Title</dt><dd>${esc(t.title)}${t.warning ? ' <span class="tag" style="background:var(--warn-soft);color:var(--warn)">Warning</span>' : ''}</dd>
           </dl>
@@ -391,15 +483,21 @@
   $('#close-filters').onclick = scrim.onclick = () => drawer(false);
 
   document.addEventListener('click', e => {
-    const el = e.target.closest('[data-class],[data-year],[data-pill],[data-open-lab],[data-batch],[data-lab-link],[data-go],[data-close],[data-photo],[data-copy],.card,.mini-list a');
+    const el = e.target.closest('[data-close-cell],[data-res],[data-cell],[data-mx-lab],[data-class],[data-year],[data-pill],[data-open-lab],[data-batch],[data-lab-link],[data-go],[data-close],[data-photo],[data-copy],.card,.mini-list a');
     if (!el) return;
+    if (el.dataset.closeCell !== undefined) { closeCell(); return; }
+    if (cellOpen && !el.matches('.mini-list a')) closeCell();
     if (el.matches('.card, .mini-list a')) {
+      cellOpen = false;
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.button) return;
       e.preventDefault(); goTest(el.dataset.id || el.getAttribute('href').match(/t\/(\d+)/)[1], !route.test); return;
     }
     if (el.dataset.class !== undefined) { toggle(S.classes, el.dataset.class); commit(); }
     else if (el.dataset.year !== undefined) { toggle(S.years, el.dataset.year); commit(); }
     else if (el.dataset.openLab !== undefined) setFilters({ labs: [el.dataset.openLab] }, 'tests');
+    else if (el.dataset.res !== undefined) { toggle(S.res, el.dataset.res); commit(); }
+    else if (el.dataset.cell !== undefined) openCell(el.dataset.u, el.dataset.cell);
+    else if (el.dataset.mxLab !== undefined) { const l = labFor(el.dataset.mxLab); if (l) setFilters({ ...DEFAULT, labs: [l] }, 'tests'); }
     else if (el.dataset.labLink !== undefined) { e.preventDefault(); setFilters({ ...DEFAULT, labs: [el.dataset.labLink] }, 'tests'); }
     else if (el.dataset.batch !== undefined) setFilters({ ...DEFAULT, q: el.dataset.batch }, 'tests');
     else if (el.dataset.go !== undefined) { if (el.dataset.go) goTest(el.dataset.go, false); }
@@ -416,7 +514,7 @@
     }
   });
   $('#f-labs').addEventListener('change', e => { const l = e.target.dataset.lab; if (l !== undefined) { toggle(S.labs, l); commit(); } });
-  $('#detail').addEventListener('click', e => { if (e.target.id === 'detail') closeDetail(); });
+  $('#detail').addEventListener('click', e => { if (e.target.id === 'detail') cellOpen ? closeCell() : closeDetail(); });
 
   document.addEventListener('keydown', e => {
     const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName);
@@ -426,6 +524,7 @@
       else if (e.key === 'ArrowRight') showPhoto(LB.i + 1);
       return;
     }
+    if (cellOpen && e.key === 'Escape') { closeCell(); return; }
     if (route.test && !typing) {
       if (e.key === 'Escape') return closeDetail();
       const go = e.key === 'ArrowLeft' || e.key === 'k' ? '[data-go]:nth-of-type(1)' : e.key === 'ArrowRight' || e.key === 'j' ? null : undefined;
@@ -446,6 +545,8 @@
   function start(d) {
     DATA = d; TESTS = d.tests;
     if (KEY) for (const t of TESTS) for (const p of t.photos) LARGE.add(p.f);
+    for (const t of TESTS) LAB_BY_NORM.set(norm(t.lab), t.lab);
+    if (d.matrix) { $('#matrix-tab').hidden = false; $('#results-facet').hidden = false; }
     document.title = d.title; $('.brand span').textContent = d.title;
     d.classes.forEach((c, i) => CLASS_COLOR[c] = PALETTE[i % PALETTE.length]);
     for (const t of TESTS) {
@@ -462,8 +563,10 @@
   async function unlock(lock, rawKey) {
     KEY = await crypto.subtle.importKey('raw', rawKey, 'AES-GCM', false, ['decrypt']);
     const plain = await decryptFetch(lock.data);       // throws if the key is wrong
-    const json = await new Response(new Blob([plain]).stream().pipeThrough(new DecompressionStream('gzip'))).json();
-    return json;
+    if (lock.gzip !== false) {                       // v1 data was gzipped
+      return new Response(new Blob([plain]).stream().pipeThrough(new DecompressionStream('gzip'))).json();
+    }
+    return JSON.parse(new TextDecoder().decode(plain));
   }
   async function deriveKey(password, lock) {
     const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
@@ -478,10 +581,12 @@
       try { return start(await unlock(lock, b64(saved))); } catch { store.del(slot); sessionDel(slot); KEY = null; }
     }
     const box = $('#lock'), form = $('#lock-form'), msg = $('#lock-msg'), input = $('#lock-pw');
+    $('#lock-show').onchange = e => { input.type = e.target.checked ? 'text' : 'password'; input.focus(); };
+    if (!window.crypto || !crypto.subtle) { msg.textContent = 'This browser cannot decrypt the archive. Open the https link in an up-to-date browser.'; }
     $('#results').innerHTML = ''; box.hidden = false; input.focus();
     form.onsubmit = async e => {
       e.preventDefault();
-      const pw = input.value.trim(); if (!pw) return;
+      const pw = input.value.replace(/\s+/g, ''); if (!pw) return;
       form.classList.add('busy'); msg.textContent = 'Checking';
       try {
         const raw = await deriveKey(pw, lock);
@@ -489,7 +594,9 @@
         (($('#lock-remember').checked) ? store.set : sessionSet)(slot, toB64(raw));
         box.hidden = true; start(d);
       } catch (err) {
-        KEY = null; msg.textContent = err instanceof DOMException && err.name === 'OperationError' ? 'Wrong password' : `Error: ${err.message}`;
+        KEY = null; msg.textContent = err instanceof DOMException && err.name === 'OperationError'
+          ? 'Wrong password. Capitals matter, and capital I and small l look the same: tick Show password to check.'
+          : `This browser could not open the archive (${err.name || 'Error'}: ${err.message}). Try an up-to-date Chrome, Firefox or Safari.`;
         input.select();
       } finally { form.classList.remove('busy'); }
     };

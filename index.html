@@ -7,7 +7,7 @@
 <meta name="referrer" content="no-referrer">
 <title>Archive</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230f766e'/%3E%3Cpath d='M12 6h8M14 6v8l-6 10a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-6-10V6' fill='none' stroke='white' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="style.css?v=d11736602e">
+<link rel="stylesheet" href="style.css?v=c1d82583ce">
 <script>try{const t=localStorage.getItem('theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
 </head>
 <body>
@@ -22,6 +22,7 @@
   <nav class="views" role="tablist" aria-label="View">
     <button data-view="tests" role="tab">Tests</button>
     <button data-view="labs" role="tab">Labs</button>
+    <button data-view="matrix" role="tab" id="matrix-tab" hidden>Matrix</button>
   </nav>
   <button id="logout" class="icon-btn" hidden aria-label="Lock" title="Lock">
     <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
@@ -47,6 +48,10 @@
       <input id="lab-search" class="mini-input" type="search" placeholder="Filter labs" autocomplete="off">
       <div id="f-labs" class="checklist"></div>
       <button id="labs-more" class="link-btn"></button>
+    </section>
+    <section id="results-facet" hidden>
+      <h3>Result</h3>
+      <div id="f-results" class="chips"></div>
     </section>
     <section>
       <h3>Year</h3>
@@ -101,7 +106,8 @@
 <div id="lock" class="lock" hidden>
   <form id="lock-form" class="lock-box" autocomplete="off">
     <h1>Password</h1>
-    <input id="lock-pw" type="password" autocomplete="current-password" aria-label="Password" required>
+    <input id="lock-pw" type="password" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Password" required>
+    <label class="check"><input id="lock-show" type="checkbox"> Show password</label>
     <label class="check"><input id="lock-remember" type="checkbox"> Remember on this device</label>
     <button class="btn primary" type="submit">Open</button>
     <p id="lock-msg" class="lock-msg" role="alert"></p>
@@ -110,6 +116,6 @@
 
 <noscript><p class="noscript">This archive needs JavaScript.</p></noscript>
 <script>window.LOCK_URL = 'lock.json';</script>
-<script src="app.js?v=d11736602e" defer></script>
+<script src="app.js?v=c1d82583ce" defer></script>
 </body>
 </html>
